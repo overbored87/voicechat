@@ -12,12 +12,31 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 const PORT = process.env.PORT || 3000;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let anthropic;
+try {
+  anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+} catch (e) {
+  console.warn("Anthropic SDK init deferred — ANTHROPIC_API_KEY not set yet");
+}
+
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JBFqnCBsd6RMkjVDRZzb";
 
 app.use(express.json());
 app.use(express.static(join(__dirname, "public")));
+
+// Explicit fallback to serve index.html for the root route
+app.get("/", (req, res) => {
+  res.sendFile(join(__dirname, "public", "index.html"));
+});
+
+// Helper to ensure Anthropic client is ready
+function getAnthropicClient() {
+  if (!anthropic) {
+    anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return anthropic;
+}
 
 // Health check
 app.get("/health", (req, res) => res.json({ status: "ok" }));
@@ -36,7 +55,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
       mediaType = req.file.mimetype;
     }
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropicClient().messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
       messages: [
@@ -84,7 +103,7 @@ app.post("/api/chat", async (req, res) => {
       { role: "user", content: message },
     ];
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropicClient().messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 200,
       system:
