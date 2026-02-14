@@ -1,6 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
-import multer from "multer";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import fs from "fs";
@@ -9,7 +8,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
 const PORT = process.env.PORT || 3000;
 
 let anthropic;
@@ -27,15 +25,12 @@ app.use(express.json());
 const publicPath = join(__dirname, "public");
 const indexPath = join(publicPath, "index.html");
 
-// Debug: log paths on startup
 console.log("__dirname:", __dirname);
 console.log("publicPath:", publicPath);
 console.log("index.html exists:", fs.existsSync(indexPath));
-console.log("public dir contents:", fs.existsSync(publicPath) ? fs.readdirSync(publicPath) : "NOT FOUND");
 
 app.use(express.static(publicPath));
 
-// Helper to ensure Anthropic client is ready
 function getAnthropicClient() {
   if (!anthropic) {
     anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -45,52 +40,6 @@ function getAnthropicClient() {
 
 // Health check
 app.get("/health", (req, res) => res.json({ status: "ok" }));
-
-// POST /api/transcribe — Send audio to Claude for speech-to-text
-app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file provided" });
-    }
-
-    const audioBase64 = req.file.buffer.toString("base64");
-    // Determine media type from the uploaded file
-    let mediaType = "audio/webm";
-    if (req.file.mimetype && req.file.mimetype.startsWith("audio/")) {
-      mediaType = req.file.mimetype;
-    }
-
-    const response = await getAnthropicClient().messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Transcribe the following audio exactly as spoken. Return ONLY the transcription text, nothing else. If the audio is silent or unintelligible, return '[inaudible]'.",
-            },
-            {
-              type: "document",
-              source: {
-                type: "base64",
-                media_type: mediaType,
-                data: audioBase64,
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    const transcription = response.content[0]?.text || "[inaudible]";
-    res.json({ text: transcription });
-  } catch (error) {
-    console.error("Transcription error:", error);
-    res.status(500).json({ error: "Transcription failed", details: error.message });
-  }
-});
 
 // POST /api/chat — Send text to Claude Sonnet and get a response
 app.post("/api/chat", async (req, res) => {
@@ -116,7 +65,8 @@ app.post("/api/chat", async (req, res) => {
       messages,
     });
 
-    const reply = response.content[0]?.text || "Sorry, I couldn't generate a response.";
+    const reply =
+      response.content[0]?.text || "Sorry, I couldn't generate a response.";
     res.json({ reply });
   } catch (error) {
     console.error("Chat error:", error);
@@ -157,7 +107,9 @@ app.post("/api/speak", async (req, res) => {
     if (!response.ok) {
       const errText = await response.text();
       console.error("ElevenLabs error:", errText);
-      return res.status(response.status).json({ error: "TTS failed", details: errText });
+      return res
+        .status(response.status)
+        .json({ error: "TTS failed", details: errText });
     }
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());
@@ -172,12 +124,12 @@ app.post("/api/speak", async (req, res) => {
   }
 });
 
-// Catch-all: serve index.html for any unmatched GET
+// Catch-all: serve index.html
 app.get("*", (req, res) => {
   if (fs.existsSync(indexPath)) {
     res.sendFile(indexPath);
   } else {
-    res.status(500).send(`index.html not found at ${indexPath}. __dirname=${__dirname}. Contents: ${fs.existsSync(publicPath) ? fs.readdirSync(publicPath).join(", ") : "public dir missing"}`);
+    res.status(500).send(`index.html not found at ${indexPath}`);
   }
 });
 

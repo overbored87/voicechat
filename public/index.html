@@ -198,6 +198,7 @@
     #status.recording { color: var(--recording); }
     #status.processing { color: var(--accent); }
     #status.speaking { color: #5ee6a0; }
+    #status.error { color: #ff6b6b; }
 
     #mic-btn {
       width: 72px;
@@ -240,6 +241,20 @@
       pointer-events: none;
     }
 
+    /* Stop icon for recording state */
+    #stop-icon {
+      display: none;
+      width: 20px;
+      height: 20px;
+      background: var(--recording);
+      border-radius: 4px;
+      position: relative;
+      z-index: 1;
+    }
+
+    #mic-btn.recording #mic-icon { display: none; }
+    #mic-btn.recording #stop-icon { display: block; }
+
     /* Pulse ring when recording */
     #mic-btn.recording::after {
       content: '';
@@ -254,6 +269,19 @@
     @keyframes pulse-ring {
       0% { transform: scale(0.9); opacity: 0.6; }
       100% { transform: scale(1.3); opacity: 0; }
+    }
+
+    /* ── Live transcript ── */
+    #live-transcript {
+      font-size: 13px;
+      color: var(--text-dim);
+      font-style: italic;
+      min-height: 18px;
+      text-align: center;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     /* ── Welcome state ── */
@@ -301,24 +329,13 @@
       line-height: 1.6;
     }
 
-    /* Audio visualizer bar */
-    #visualizer {
-      display: flex;
-      gap: 3px;
-      align-items: center;
-      height: 24px;
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-
-    #visualizer.active { opacity: 1; }
-
-    #visualizer .bar {
-      width: 3px;
-      height: 6px;
-      background: var(--recording);
-      border-radius: 2px;
-      transition: height 0.08s ease;
+    /* Unsupported browser notice */
+    .unsupported {
+      display: none;
+      text-align: center;
+      padding: 20px;
+      color: #ff6b6b;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -344,10 +361,12 @@
       </div>
     </div>
 
+    <div class="unsupported" id="unsupported">
+      Your browser doesn't support speech recognition. Please use Chrome, Safari, or Edge.
+    </div>
+
     <div id="controls">
-      <div id="visualizer">
-        <!-- bars injected by JS -->
-      </div>
+      <div id="live-transcript"></div>
       <button id="mic-btn" aria-label="Toggle recording">
         <svg id="mic-icon" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -355,6 +374,7 @@
           <line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2"/>
           <line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2"/>
         </svg>
+        <div id="stop-icon"></div>
       </button>
       <div id="status">Tap to speak</div>
     </div>
@@ -365,27 +385,25 @@
     const welcomeEl = document.getElementById("welcome");
     const micBtn = document.getElementById("mic-btn");
     const statusEl = document.getElementById("status");
-    const visualizerEl = document.getElementById("visualizer");
+    const liveTranscript = document.getElementById("live-transcript");
+    const unsupportedEl = document.getElementById("unsupported");
 
     // State
     let isRecording = false;
     let isProcessing = false;
-    let mediaRecorder = null;
-    let audioChunks = [];
-    let audioStream = null;
-    let analyser = null;
-    let animFrameId = null;
     let conversationHistory = [];
     let currentAudio = null;
+    let recognition = null;
+    let finalTranscript = "";
 
-    // Create visualizer bars
-    const BAR_COUNT = 20;
-    for (let i = 0; i < BAR_COUNT; i++) {
-      const bar = document.createElement("div");
-      bar.className = "bar";
-      visualizerEl.appendChild(bar);
+    // ── Check for Speech Recognition support ──
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      unsupportedEl.style.display = "block";
+      micBtn.classList.add("disabled");
+      statusEl.textContent = "Speech not supported";
     }
-    const bars = visualizerEl.querySelectorAll(".bar");
 
     // ── Mic button handler ──
     micBtn.addEventListener("click", async () => {
@@ -396,145 +414,118 @@
         currentAudio.pause();
         currentAudio.currentTime = 0;
         currentAudio = null;
+        statusEl.textContent = "Tap to speak";
+        statusEl.className = "";
       }
 
       if (!isRecording) {
-        await startRecording();
+        startRecording();
       } else {
         stopRecording();
       }
     });
 
-    async function startRecording() {
-      try {
-        // iOS-compatible audio constraints
-        const constraints = {
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 44100,
+    function startRecording() {
+      if (!SpeechRecognition) return;
+
+      finalTranscript = "";
+      liveTranscript.textContent = "";
+
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + " ";
+          } else {
+            interim += transcript;
           }
-        };
-
-        audioStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-        // Set up analyser for visualizer
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-        const source = audioCtx.createMediaStreamSource(audioStream);
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 64;
-        source.connect(analyser);
-
-        // Determine best supported mime type
-        let mimeType = "audio/webm;codecs=opus";
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = "audio/webm";
         }
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = "audio/mp4";
+        liveTranscript.textContent = finalTranscript + interim;
+      };
+
+      recognition.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error === "not-allowed") {
+          statusEl.textContent = "Microphone access denied";
+          statusEl.className = "error";
+        } else if (event.error !== "aborted") {
+          statusEl.textContent = "Speech error: " + event.error;
+          statusEl.className = "error";
         }
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = ""; // let browser pick
+        isRecording = false;
+        micBtn.classList.remove("recording");
+      };
+
+      recognition.onend = () => {
+        // If we're still in recording mode, the user hasn't stopped yet
+        // This can happen on iOS where recognition auto-stops
+        if (isRecording) {
+          // Auto-process what we have
+          isRecording = false;
+          micBtn.classList.remove("recording");
+          processTranscript();
         }
+      };
 
-        const options = mimeType ? { mimeType } : {};
-        mediaRecorder = new MediaRecorder(audioStream, options);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) audioChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = () => {
-          const actualMime = mediaRecorder.mimeType || mimeType || "audio/webm";
-          const blob = new Blob(audioChunks, { type: actualMime });
-          handleAudioBlob(blob, actualMime);
-        };
-
-        mediaRecorder.start(250); // collect in 250ms chunks
+      try {
+        recognition.start();
         isRecording = true;
         micBtn.classList.add("recording");
         statusEl.textContent = "Listening…";
         statusEl.className = "recording";
-        visualizerEl.classList.add("active");
-        animateVisualizer();
       } catch (err) {
-        console.error("Mic access failed:", err);
-        statusEl.textContent = "Microphone access denied";
-        statusEl.className = "";
+        console.error("Failed to start recognition:", err);
+        statusEl.textContent = "Failed to start mic";
+        statusEl.className = "error";
       }
     }
 
     function stopRecording() {
-      if (mediaRecorder && mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
+      if (recognition) {
+        isRecording = false;
+        micBtn.classList.remove("recording");
+        recognition.stop();
+        // Small delay to collect final results
+        setTimeout(() => {
+          processTranscript();
+        }, 300);
       }
-      if (audioStream) {
-        audioStream.getTracks().forEach((t) => t.stop());
-        audioStream = null;
-      }
-      isRecording = false;
-      micBtn.classList.remove("recording");
-      visualizerEl.classList.remove("active");
-      if (animFrameId) cancelAnimationFrame(animFrameId);
     }
 
-    function animateVisualizer() {
-      if (!analyser || !isRecording) return;
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(data);
+    async function processTranscript() {
+      const userText = finalTranscript.trim();
+      liveTranscript.textContent = "";
 
-      bars.forEach((bar, i) => {
-        const val = data[i] || 0;
-        const h = Math.max(4, (val / 255) * 28);
-        bar.style.height = h + "px";
-      });
-
-      animFrameId = requestAnimationFrame(animateVisualizer);
-    }
-
-    // ── Process recorded audio ──
-    async function handleAudioBlob(blob, mimeType) {
-      if (blob.size < 1000) {
-        statusEl.textContent = "Tap to speak";
+      if (!userText) {
+        statusEl.textContent = "Didn't catch that. Try again.";
         statusEl.className = "";
+        setTimeout(() => {
+          statusEl.textContent = "Tap to speak";
+          statusEl.className = "";
+        }, 2000);
         return;
       }
 
       isProcessing = true;
       micBtn.classList.add("disabled");
-      statusEl.textContent = "Transcribing…";
-      statusEl.className = "processing";
 
       // Remove welcome message on first interaction
-      if (welcomeEl) welcomeEl.remove();
+      if (welcomeEl && welcomeEl.parentNode) {
+        welcomeEl.remove();
+      }
+
+      addMessage("user", userText);
 
       try {
-        // 1. Transcribe audio via Claude
-        const formData = new FormData();
-        formData.append("audio", blob, "recording." + (mimeType.includes("mp4") ? "mp4" : "webm"));
-
-        const transcribeRes = await fetch("/api/transcribe", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!transcribeRes.ok) throw new Error("Transcription failed");
-        const { text: userText } = await transcribeRes.json();
-
-        if (!userText || userText === "[inaudible]") {
-          statusEl.textContent = "Couldn't hear that. Try again.";
-          statusEl.className = "";
-          isProcessing = false;
-          micBtn.classList.remove("disabled");
-          return;
-        }
-
-        addMessage("user", userText);
-
-        // 2. Get chat response from Claude
+        // 1. Get chat response from Claude
         statusEl.textContent = "Thinking…";
+        statusEl.className = "processing";
         showThinking();
 
         const chatRes = await fetch("/api/chat", {
@@ -546,7 +537,11 @@
           }),
         });
 
-        if (!chatRes.ok) throw new Error("Chat failed");
+        if (!chatRes.ok) {
+          const err = await chatRes.json().catch(() => ({}));
+          throw new Error(err.details || "Chat request failed");
+        }
+
         const { reply } = await chatRes.json();
 
         removeThinking();
@@ -561,7 +556,7 @@
           conversationHistory = conversationHistory.slice(-20);
         }
 
-        // 3. Convert response to speech via ElevenLabs
+        // 2. Convert response to speech via ElevenLabs
         statusEl.textContent = "Speaking…";
         statusEl.className = "speaking";
 
@@ -585,8 +580,11 @@
             statusEl.className = "";
             currentAudio = null;
           };
+          // iOS requires user interaction to play audio.
+          // Since this flow started from a button tap, it should work.
           await currentAudio.play();
         } else {
+          console.warn("TTS failed, skipping audio");
           statusEl.textContent = "Tap to speak";
           statusEl.className = "";
         }
