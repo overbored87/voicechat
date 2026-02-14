@@ -23,12 +23,17 @@ const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JBFqnCBsd6RMkjVDRZzb";
 
 app.use(express.json());
-app.use(express.static(join(__dirname, "public")));
 
-// Explicit fallback to serve index.html for the root route
-app.get("/", (req, res) => {
-  res.sendFile(join(__dirname, "public", "index.html"));
-});
+const publicPath = join(__dirname, "public");
+const indexPath = join(publicPath, "index.html");
+
+// Debug: log paths on startup
+console.log("__dirname:", __dirname);
+console.log("publicPath:", publicPath);
+console.log("index.html exists:", fs.existsSync(indexPath));
+console.log("public dir contents:", fs.existsSync(publicPath) ? fs.readdirSync(publicPath) : "NOT FOUND");
+
+app.use(express.static(publicPath));
 
 // Helper to ensure Anthropic client is ready
 function getAnthropicClient() {
@@ -164,6 +169,15 @@ app.post("/api/speak", async (req, res) => {
   } catch (error) {
     console.error("TTS error:", error);
     res.status(500).json({ error: "TTS failed", details: error.message });
+  }
+});
+
+// Catch-all: serve index.html for any unmatched GET
+app.get("*", (req, res) => {
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(500).send(`index.html not found at ${indexPath}. __dirname=${__dirname}. Contents: ${fs.existsSync(publicPath) ? fs.readdirSync(publicPath).join(", ") : "public dir missing"}`);
   }
 });
 
