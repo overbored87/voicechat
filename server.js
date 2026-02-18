@@ -61,7 +61,9 @@ app.post("/api/chat", async (req, res) => {
       model: "claude-sonnet-4-20250514",
       max_tokens: 200,
       system:
-        "You are a friendly, concise AI voice assistant. Keep every response under 50 words. Never use lists, bullet points, or numbered items. Speak in natural, conversational sentences. Be warm and helpful.",
+        `You are a friendly, concise AI voice assistant. Keep every response under 50 words. Never use lists, bullet points, or numbered items. Speak in natural, conversational sentences. Be warm and helpful.
+
+You may use ElevenLabs v3 audio tags to add expressiveness to your speech. Use them sparingly and naturally. Available tags include: [laughs], [sighs], [gasps], [clears throat], [whispers], [chuckles]. Place tags inline where they'd naturally occur in speech. Do not overuse them — at most one or two per response when they genuinely fit the emotion.`,
       messages,
     });
 
@@ -93,13 +95,7 @@ app.post("/api/speak", async (req, res) => {
         },
         body: JSON.stringify({
           text,
-          model_id: "eleven_turbo_v2_5",
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-            style: 0.0,
-            use_speaker_boost: true,
-          },
+          model_id: "eleven_v3",
         }),
       }
     );
